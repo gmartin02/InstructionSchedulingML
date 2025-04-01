@@ -58,13 +58,40 @@ class Simulator:
         print("")
 
     def execute(self):
-        print("")
+        execute_count = 0
+        for instr in self.issue_list:
+            if instr.state == EX:
+                instr.remaining_latency -= 1
+                if instr.remaining_latency == 0:
+                    instr.state = WB
+                    instr.timing['WB'] = self.cycle
+                    print(f"Cycle {self.cycle}: Execute - Instruction {instr.tag} (PC: {hex(instr.address)}) execution is completed")
+                    execute_count += 1
+        return execute_count
 
     def issue(self):
-       print("")
+        issue_count = 0
+        while len(self.issue_list) < self.issue_capacity and self.dispatch_list:
+            instr = self.dispatch_list.pop(0)
+            if instr.state == ID:
+                instr.state = IS
+                instr.remaining_latency = instr.exec_latency
+                instr.timing['IS'] = self.cycle
+                print(f"Cycle {self.cycle}: Issue - Instruction {instr.tag} (PC: {hex(instr.address)}) moved to IS")
+                self.issue_list.append(instr)
+                issue_count += 1
+        return issue_count
 
     def dispatch(self):
-        print("")
+        dispatch_count = 0
+        while len(self.dispatch_list) < self.dispatch_capacity and self.fake_rob:
+            instr = self.fake_rob.pop(0)
+            if instr.state == ID:
+                instr.state = IS
+                instr.timing['IS'] = self.cycle
+                print(f"Cycle {self.cycle}: Dispatch - Instruction {instr.tag} (PC: {hex(instr.address)}) dispatched")
+                dispatch_count += 1
+        return dispatch_count
 
     def fetch(self):
         for instr in self.dispatch_list:
