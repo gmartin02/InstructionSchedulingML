@@ -1,8 +1,6 @@
-# Define pipeline states as integer constants.
 IF, ID, IS, EX, WB = range(5)
 
 class Instruction:
-    # Class variable to assign a unique tag to each instruction.
     fetch_count = 0
 
     def __init__(self, address, operation, dest, src1, src2):
@@ -17,7 +15,7 @@ class Instruction:
 
         self.state = IF
 
-        # Set execution latency based on operation type
+        # set execution latency based on operation type
         if self.operation == 0:
             self.exec_latency = 1
         elif self.operation == 1:
@@ -27,7 +25,7 @@ class Instruction:
 
         self.remaining_latency = None
 
-        # Timing information for each stage.
+        # timing information for each stage
         self.timing = {
             'IF': None,
             'ID': None,
@@ -50,13 +48,16 @@ class Simulator:
         self.total_instructions = len(trace_instructions)
         self.cycle = 0
 
+        # parameters for machine learning
+        self.fetch_bandwidth = 2       # max instructions fetched per cycle
+        self.dispatch_capacity = 16    # capacity for dispatch queue
+        self.issue_capacity = 16       # capacity for issue queue
+        self.issue_width = 2           # max instructions issued per cycle
+
     def fake_retire(self):
         print("")
 
     def execute(self):
-        print("")
-
-    def is_ready(self, instr):
         print("")
 
     def issue(self):
@@ -66,7 +67,24 @@ class Simulator:
         print("")
 
     def fetch(self):
-        print("")
+        for instr in self.dispatch_list:
+            if instr.state == IF:
+                instr.state = ID
+                if instr.timing['ID'] is None:
+                    instr.timing['ID'] = self.cycle
+                print(f"Cycle {self.cycle}: Fetch - Instruction {instr.tag} (PC: {hex(instr.address)}) went from IF to ID")
+
+        fetch_count = 0
+        while self.trace and fetch_count < self.fetch_bandwidth and len(self.dispatch_list) < self.dispatch_capacity:
+            instr = self.trace.pop(0)
+            instr.state = IF
+            if instr.timing['IF'] is None:
+                instr.timing['IF'] = self.cycle
+            self.fake_rob.append(instr)
+            self.dispatch_list.append(instr)
+            fetch_count += 1
+            print(f"Cycle {self.cycle}: Fetch - Fetched new Instruction {instr.tag} (PC: {hex(instr.address)}) into fake-ROB and dispatch_list")
+        return fetch_count
 
     def advance_cycle(self):
         self.cycle += 1
@@ -77,7 +95,7 @@ class Simulator:
         return True
 
     def run(self):
-       #Main simulation loop
+       # main simulation loop
         while True:
             self.fake_retire()
             self.execute()
@@ -102,7 +120,7 @@ class Simulator:
         print("Timing per instruction:")
         
         for instr in sorted(self.all_instructions, key=lambda x: x.tag):
-            # Compute timings for each instruction
+            # compute timings for each instruction
             if_start = instr.timing['IF'] if instr.timing['IF'] is not None else 0
             id_start = instr.timing['ID'] if instr.timing['ID'] is not None else (if_start + 1)
             is_start = instr.timing['IS'] if instr.timing['IS'] is not None else (id_start + 1)
