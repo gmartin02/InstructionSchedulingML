@@ -55,7 +55,15 @@ class Simulator:
         self.issue_width = 2           # max instructions issued per cycle
 
     def fake_retire(self):
-        print("")
+        retire_count = 0
+        for instr in self.fake_rob:
+            if instr.state == WB:
+                instr.state = 'Retire'
+                instr.timing['Retire'] = self.cycle
+                print(f"Cycle {self.cycle}: Retire - Instruction {instr.tag} (PC: {hex(instr.address)}) retire has been completed")
+                retire_count += 1
+        self.fake_rob = [instr for instr in self.fake_rob if instr.state != 'Retire']
+        return retire_count
 
     def execute(self):
         execute_count = 0
