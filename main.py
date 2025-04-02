@@ -36,7 +36,7 @@ class Instruction:
         }
 
 class Simulator:
-    def __init__(self, trace_instructions):
+    def __init__(self, trace_instructions, S, N):
         self.all_instructions = list(trace_instructions)
         
         self.fake_rob = []
@@ -49,36 +49,48 @@ class Simulator:
         self.cycle = 0
 
         # parameters for machine learning
+        self.N = N
         self.fetch_bandwidth = 2       # max instructions fetched per cycle
         self.dispatch_capacity = 16    # capacity for dispatch queue
         self.issue_capacity = 16       # capacity for issue queue
         self.issue_width = 2           # max instructions issued per cycle
 
+        # for dependency: an instruction is “ready” only when its tag equals last_retired_tag+1
+        self.last_retired_tag = -1
     def fake_retire(self):
-        retire_count = 0
-        for instr in self.fake_rob:
-            if instr.state == WB:
-                instr.state = 'Retire'
-                instr.timing['Retire'] = self.cycle
-                print(f"Cycle {self.cycle}: Retire - Instruction {instr.tag} (PC: {hex(instr.address)}) retire has been completed")
-                retire_count += 1
-        self.fake_rob = [instr for instr in self.fake_rob if instr.state != 'Retire']
-        return retire_count
+        #changed to a while loop to treat more like a queue
+        while self.fake_rob and self.fake_rob[0].state == WB:
+            instr = self.fake_rob.pop(0)
+            instr.state = 'Retire'
+            instr.timing['Retire'] = self.cycle
+            self.last_retired_tag = max(self.last_retired_tag, instr.tag)
+            print(f"Cycle {self.cycle}: Retire - Instruction {instr.tag} (PC: {hex(instr.address)}) retire has been completed")
 
     def execute(self):
-        execute_count = 0
-        for instr in self.issue_list:
-            if instr.state == EX:
-                instr.remaining_latency -= 1
-                if instr.remaining_latency == 0:
-                    instr.state = WB
-                    instr.timing['WB'] = self.cycle
-                    print(f"Cycle {self.cycle}: Execute - Instruction {instr.tag} (PC: {hex(instr.address)}) execution is completed")
-                    execute_count += 1
-        return execute_count
+        new_ex_list = []
+        for instr in self.execute_list:
+            if instr.timing['EX'] is None:
+                instr.timing['EX'] = self.cycle
+                if instr.remaining_latency is None:
+                    instr.remaining_latency = instr.exec_latency
+            instr.remaining_latency -= 1
+            print(f"Cycle {self.cycle}: Execute - Instr {instr.tag} remaining latency {instr.remaining_latency}")
+            if instr.remaining_latency <= 0:
+                instr.state = WB
+                instr.timing['WB'] = self.cycle
+                print(f"Cycle {self.cycle}: Execute - Instr {instr.tag} completed EX, moved to WB")
+            else:
+                new_ex_list.append(instr)
+        self.execute_list = new_ex_list
 
     def issue(self):
-        issue_count = 0
+        for instr in self.dispatch_list:
+            if instr.state == IF:
+                instr.state = ID
+                if instr.timing['ID'] is None:
+                    instr.timing['ID'] = self.cycle + 1
+                print(f"Cycle {self.cycle}: Issue - Instr {instr.tag} converted from IF to ID")
+        
         while len(self.issue_list) < self.issue_capacity and self.dispatch_list:
             instr = self.dispatch_list.pop(0)
             if instr.state == ID:
@@ -87,19 +99,33 @@ class Simulator:
                 instr.timing['IS'] = self.cycle
                 print(f"Cycle {self.cycle}: Issue - Instruction {instr.tag} (PC: {hex(instr.address)}) moved to IS")
                 self.issue_list.append(instr)
-                issue_count += 1
-        return issue_count
+        
+        ready_instrs = [instr for instr in self.issue_list if instr.tag == self.last_retired_tag + 1]
+        ready_instrs.sort(key=lambda x: x.tag)
+        for instr in ready_instrs[:self.issue_width]:
+            self.issue_list.remove(instr)
+            instr.state = EX
+            if instr.timing['EX'] is None:
+                instr.timing['EX'] = self.cycle
+            if instr.remaining_latency is None:
+                instr.remaining_latency = instr.exec_latency
+            self.execute_list.append(instr)
+            print(f"Cycle {self.cycle}: Issue - Instr {instr.tag} issued to EX (IS duration = {self.cycle - instr.timing['IS']})")
 
     def dispatch(self):
-        dispatch_count = 0
-        while len(self.dispatch_list) < self.dispatch_capacity and self.fake_rob:
-            instr = self.fake_rob.pop(0)
-            if instr.state == ID:
-                instr.state = IS
-                instr.timing['IS'] = self.cycle
-                print(f"Cycle {self.cycle}: Dispatch - Instruction {instr.tag} (PC: {hex(instr.address)}) dispatched")
-                dispatch_count += 1
-        return dispatch_count
+        for instr in self.fake_rob:
+            if instr.state == IF:
+                instr.state = ID
+                if instr.timing['ID'] is None:
+                    instr.timing['ID'] = self.cycle
+                print(f"Cycle {self.cycle}: Dispatch - Instr {instr.tag} converted from IF to ID in fake_rob")
+        temp_list = [instr for instr in self.fake_rob if instr.state == ID]
+        temp_list.sort(key=lambda x: x.tag)
+        for instr in temp_list:
+            if len(self.dispatch_list) < self.dispatch_capacity:
+                if instr not in self.dispatch_list:
+                    self.dispatch_list.append(instr)
+                    print(f"Cycle {self.cycle}: Dispatch - Instr {instr.tag} dispatched to dispatch_list")
 
     def fetch(self):
         for instr in self.dispatch_list:
@@ -149,27 +175,31 @@ class Simulator:
         total_cycles = self.cycle
         ipc = self.total_instructions / total_cycles if total_cycles > 0 else 0
 
-        print(f"Total instructions: {self.total_instructions}")
-        print(f"Total cycles: {total_cycles}")
-        print(f"Average IPC: {ipc:.3f}\n")
-        print("Timing per instruction:")
-        
+        out_lines = []
+        out_lines.append(f"Total instructions: {self.total_instructions}")
+        out_lines.append(f"Total cycles: {total_cycles}")
+        out_lines.append(f"Average IPC: {ipc:.3f}\n")
+        out_lines.append("Timing per instruction:")
         for instr in sorted(self.all_instructions, key=lambda x: x.tag):
             # compute timings for each instruction
             if_start = instr.timing['IF'] if instr.timing['IF'] is not None else 0
             id_start = instr.timing['ID'] if instr.timing['ID'] is not None else (if_start + 1)
             is_start = instr.timing['IS'] if instr.timing['IS'] is not None else (id_start + 1)
-            ex_start = instr.timing['EX_start'] if instr.timing['EX_start'] is not None else (is_start + 1)
+            ex_start = instr.timing['EX'] if instr.timing['EX'] is not None else (is_start + 1)
             wb_start = instr.timing['WB'] if instr.timing['WB'] is not None else (ex_start + 1)
             if_dur = id_start - if_start
             id_dur = is_start - id_start
             is_dur = ex_start - is_start
             ex_dur = wb_start - ex_start
             wb_dur = 1
-            
-            print(f"{instr.tag} fu{{{instr.operation}}} src{{{instr.src1},{instr.src2}}} dst{{{instr.dest}}} "
-                  f"IF{{{if_start},{if_dur}}} ID{{{id_start},{id_dur}}} IS{{{is_start},{is_dur}}} "
-                  f"EX{{{ex_start},{ex_dur}}} WB{{{wb_start},{wb_dur}}}")
+            out_lines.append(f"{instr.tag} fu{{{instr.operation}}} src{{{instr.src1},{instr.src2}}} dst{{{instr.dest}}} " +
+                f"IF{{{if_start},{if_dur}}} ID{{{id_start},{id_dur}}} IS{{{is_start},{is_dur}}} " +
+                f"EX{{{ex_start},{ex_dur}}} WB{{{wb_start},{wb_dur}}}")
+        
+        with open("sim_output.txt", "w") as fout:
+            for line in out_lines:
+                fout.write(line + "\n")
+        print("\nFinal statistics written to sim_output.txt")
 
 def read_trace(filename):
     instructions = []
@@ -199,6 +229,8 @@ def read_trace(filename):
     return instructions
 
 if __name__ == '__main__':
+    S = 2
+    N = 8
     trace_filename = 'trace.txt'
     try:
         trace_instructions = read_trace(trace_filename)
@@ -206,6 +238,6 @@ if __name__ == '__main__':
         print(f"Error: Trace file '{trace_filename}' not found.")
         exit(1)
 
-    sim = Simulator(trace_instructions)
+    sim = Simulator(trace_instructions, S, N)
     sim.run()
     sim.print_final_stats()
